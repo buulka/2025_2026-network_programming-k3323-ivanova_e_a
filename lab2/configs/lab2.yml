@@ -1,0 +1,92 @@
+---
+- name: Lab2 setup
+  hosts: mikrotik
+  gather_facts: no
+
+  tasks:
+
+    - name: Create local export directory
+      delegate_to: localhost
+      file:
+        path: "./configs"
+        state: directory
+
+    - name: Allow OSPF in firewall and set WireGuard MTU
+      community.routeros.command:
+        commands:
+          - /ip firewall filter add chain=input protocol=ospf action=accept place-before=0 comment="Allow OSPF"
+          - /interface wireguard set [find] mtu=1300
+      ignore_errors: yes
+
+    - name: Clean previous OSPF configuration
+      community.routeros.command:
+        commands:
+          - /routing ospf static-neighbor remove [find]
+          - /routing ospf interface-template remove [find]
+          - /routing ospf area remove [find]
+          - /routing ospf instance remove [find]
+          - /ip address remove [find interface=loopback]
+          - /interface bridge remove [find name=loopback]
+      ignore_errors: yes
+
+    - name: Set identity and configure NTP client
+      community.routeros.command:
+        commands:
+          - /system identity set name={{ inventory_hostname | upper }}
+          - /system ntp client set enabled=yes servers=0.ru.pool.ntp.org,pool.ntp.org
+      ignore_errors: yes
+
+    - name: Configure loopback
+      community.routeros.command:
+        commands:
+          - /interface bridge add name=loopback
+          - /ip address add address={{ router_id }}/32 interface=loopback network={{ router_id }}
+      ignore_errors: yes
+
+    - name: Configure OSPF
+      community.routeros.command:
+        commands:
+          - /routing ospf instance add name=inst router-id={{ router_id }} disabled=no
+          - /routing ospf area add name=backbone area-id=0.0.0.0 instance=inst
+          - /routing ospf interface-template add area=backbone networks=10.10.10.0/24 type=ptp
+          - "/routing ospf static-neighbor add address={{ '10.10.10.3' if inventory_hostname == 'chr1' else '10.10.10.2' }} area=backbone"
+      ignore_errors: yes
+
+    - name: Wait for OSPF adjacency
+      pause:
+        seconds: 40
+
+    - name: Get router facts
+      community.routeros.facts:
+        gather_subset: all
+      register: chr_facts
+
+    - name: Get config export
+      community.routeros.command:
+        commands:
+          - /export compact
+      register: chr_export
+
+    - name: Get OSPF interfaces
+      community.routeros.command:
+        commands:
+          - /routing ospf interface print detail
+      register: ospf_interfaces
+
+    - name: Save facts to file
+      delegate_to: localhost
+      copy:
+        content: "{{ chr_facts }}"
+        dest: "./configs/{{ inventory_hostname }}_facts.json"
+
+    - name: Save config export to file
+      delegate_to: localhost
+      copy:
+        content: "{{ chr_export.stdout[0] }}"
+        dest: "./configs/{{ inventory_hostname }}_export.rsc"
+
+    - name: Save OSPF topology to file
+      delegate_to: localhost
+      copy:
+        content: "INTERFACES:\n{{ ospf_interfaces.stdout[0] }}"
+        dest: "./configs/{{ inventory_hostname }}_ospf.txt"
