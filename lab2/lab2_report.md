@@ -141,31 +141,30 @@ ansible-inventory --list
 
 ### Плейбук `lab2.yml`
 
-Плейбук одной командой настраивает оба CHR: задает имя, NTP-клиента, OSPF с уникальным Router ID и собирает конфиги в 
-локальные файлы. Использует переменные `inventory_hostname` и `router_id` из inventory, что позволяет применять одну и 
-ту же логику ко всем устройствам без копипасты:
-
+лейбук одной командой настраивает оба CHR: задаёт loopback-интерфейс, identity, NTP-клиента, OSPF с уникальным 
+Router ID и собирает конфиги в локальные файлы. Использует переменные `inventory_hostname` и `router_id` из inventory:
+ 
 ```yaml
 ---
 - name: Lab2 setup
   hosts: mikrotik
   gather_facts: no
-
+ 
   tasks:
-
-    - name: Create local configs directory
+ 
+    - name: Create local export directory
       delegate_to: localhost
       file:
         path: "./configs"
         state: directory
-
+ 
     - name: Allow OSPF in firewall and set WireGuard MTU
       community.routeros.command:
         commands:
           - /ip firewall filter add chain=input protocol=ospf action=accept place-before=0 comment="Allow OSPF"
           - /interface wireguard set [find] mtu=1300
       ignore_errors: yes
-
+ 
     - name: Clean previous OSPF configuration
       community.routeros.command:
         commands:
@@ -173,201 +172,170 @@ ansible-inventory --list
           - /routing ospf interface-template remove [find]
           - /routing ospf area remove [find]
           - /routing ospf instance remove [find]
+          - /ip address remove [find interface=loopback]
+          - /interface bridge remove [find name=loopback]
       ignore_errors: yes
-
+ 
     - name: Set identity and configure NTP client
       community.routeros.command:
         commands:
           - /system identity set name={{ inventory_hostname | upper }}
-          - /system ntp client set enabled=yes servers=pool.ntp.org,time.google.com
+          - /system ntp client set enabled=yes servers=0.ru.pool.ntp.org,pool.ntp.org
       ignore_errors: yes
-
+ 
+    - name: Configure loopback
+      community.routeros.command:
+        commands:
+          - /interface bridge add name=loopback
+          - /ip address add address={{ router_id }}/32 interface=loopback network={{ router_id }}
+      ignore_errors: yes
+ 
     - name: Configure OSPF
       community.routeros.command:
         commands:
-          - /routing ospf instance add name=default router-id={{ router_id }} disabled=no
-          - /routing ospf area add name=backbone instance=default area-id=0.0.0.0
+          - /routing ospf instance add name=inst router-id={{ router_id }} disabled=no
+          - /routing ospf area add name=backbone area-id=0.0.0.0 instance=inst
           - /routing ospf interface-template add area=backbone networks=10.10.10.0/24 type=ptp
-          - "/routing ospf static-neighbor add address={{ '10.10.10.3' if inventory_hostname == 'chr1' else '10.10.10.2' }} instance=default"
+          - "/routing ospf static-neighbor add address={{ '10.10.10.3' if inventory_hostname == 'chr1' else '10.10.10.2' }} area=backbone"
       ignore_errors: yes
-
+ 
     - name: Wait for OSPF adjacency
       pause:
-        seconds: 30
-
-    - name: Collect config and OSPF neighbors
+        seconds: 40
+ 
+    - name: Get router facts
+      community.routeros.facts:
+        gather_subset: all
+      register: chr_facts
+ 
+    - name: Get config export
       community.routeros.command:
         commands:
           - /export compact
-          - /routing ospf neighbor print detail
-      register: chr_output
-
-    - name: Save output files locally
+      register: chr_export
+ 
+    - name: Get OSPF interfaces
+      community.routeros.command:
+        commands:
+          - /routing ospf interface print detail
+      register: ospf_interfaces
+ 
+    - name: Save facts to file
       delegate_to: localhost
       copy:
-        content: "{{ item.content }}"
-        dest: "./configs/{{ inventory_hostname }}_{{ item.suffix }}"
-      loop:
-        - { content: "{{ chr_output.stdout[0] }}", suffix: "export.rsc" }
-        - { content: "NEIGHBORS:\n{{ chr_output.stdout[1] }}", suffix: "ospf.txt" }
+        content: "{{ chr_facts }}"
+        dest: "./configs/{{ inventory_hostname }}_facts.json"
+ 
+    - name: Save config export to file
+      delegate_to: localhost
+      copy:
+        content: "{{ chr_export.stdout[0] }}"
+        dest: "./configs/{{ inventory_hostname }}_export.rsc"
+ 
+    - name: Save OSPF topology to file
+      delegate_to: localhost
+      copy:
+        content: "INTERFACES:\n{{ ospf_interfaces.stdout[0] }}"
+        dest: "./configs/{{ inventory_hostname }}_ospf.txt"
 ```
-
+ 
 Пояснения по ключевым моментам плейбука:
-
+ 
 - **Allow OSPF in firewall + WireGuard MTU = 1300** — OSPF поверх WireGuard в RouterOS 7.x работает нестабильно с MTU 
   по умолчанию (1420). Снижение до 1300 решает проблему с прохождением OSPF DBD-пакетов через туннель
 - **Clean previous OSPF configuration** — гарантирует чистое состояние при повторном запуске плейбука, иначе команды 
   `add` ругаются на «already exists»
+- **Configure loopback** — создаёт bridge-интерфейс loopback и назначает на него router_id как `/32` адрес, 
+  что используется как Router ID в OSPF
 - **type=ptp в interface-template** — point-to-point режим обходит проблему с multicast-рассылкой hello-пакетов 
   через WireGuard, который не реплицирует multicast между peer'ами
-- **static-neighbor с условным выражением** — для каждого CHR указывается явный адрес соседа (CHR1 → 10.10.10.3, 
-  CHR2 → 10.10.10.2), что заставляет OSPF отправлять hello unicast'ом вместо multicast. Это финальный фикс, 
-  необходимый для работы OSPF поверх WireGuard
-
-Запуск:
-
-```bash
-ansible-playbook lab2.yml
-```
-
-Плейбук выполняется на обоих хостах параллельно, без ошибок:
-
-```
-PLAY [Lab2 setup] *****************************************************
-
-TASK [Create local configs directory] *********************************
-ok: [chr1 -> localhost]
-changed: [chr2 -> localhost]
-
-TASK [Allow OSPF in firewall and set WireGuard MTU] *******************
-changed: [chr1]
-changed: [chr2]
-
-TASK [Clean previous OSPF configuration] ******************************
-changed: [chr1]
-changed: [chr2]
-
-TASK [Set identity and configure NTP client] **************************
-changed: [chr1]
-changed: [chr2]
-
-TASK [Configure OSPF] *************************************************
-changed: [chr1]
-changed: [chr2]
-
-PLAY RECAP ************************************************************
-chr1 : ok=9  changed=6  unreachable=0  failed=0  skipped=0
-chr2 : ok=9  changed=6  unreachable=0  failed=0  skipped=0
-```
-
 ### Проверка результата плейбука на роутерах
-
+ 
 После выполнения плейбука изменения действительно произошли на обоих CHR. Проверка NTP-клиента:
-
+ 
 ```
 [admin@CHR1] > /system ntp client print
-        enabled: yes
-           mode: unicast
-        servers: pool.ntp.org, time.google.com
-            vrf: main
-     freq-drift: -2.197 PPM
-         status: synchronized
-   synced-server: pool.ntp.org
-  synced-stratum: 2
-   system-offset: 5.587 ms
+         enabled: yes              
+            mode: unicast          
+         servers: pool.ntp.org     
+                  0.ru.pool.ntp.org
+             vrf: main             
+      freq-drift: 3.304 PPM        
+          status: synchronized     
+   synced-server: 0.ru.pool.ntp.org
+  synced-stratum: 3                
+   system-offset: 2.99 ms
 ```
-
-Аналогичный вывод на CHR2. Проверка identity:
-
+ 
+Проверка identity:
+ 
 ```
 [admin@CHR1] > /system identity print
 name: CHR1
-
+ 
 [admin@CHR2] > /system identity print
 name: CHR2
 ```
-
+ 
 Проверка пользователя для Ansible:
-
+ 
 ```
 [admin@CHR1] > /user print
-Flags: X - disabled
- #   NAME      GROUP         ADDRESS         LAST-LOGGED-IN
- 0   admin     full
- 1   ansible   ansible-grp   10.10.10.0/24   2026-05-22 11:38:33
+Columns: NAME, GROUP, ADDRESS, LAST-LOGGED-IN, INACTIVITY-POLICY
+# NAME     GROUP        ADDRESS        LAST-LOGGED-IN       INACTIVITY-POLICY
+;;; system default user
+0 admin    full                        2026-05-22 11:38:22  none             
+1 ansible  ansible-grp  10.10.10.0/24  2026-05-29 13:41:35  none     
 ```
-
+ 
 ### Проверка связности
-
+ 
 Проверка туннелей с сервера:
-
+ 
 ```bash
 sudo wg show
 ping -c 4 10.10.10.2
 ping -c 4 10.10.10.3
 ```
-
+ 
 Оба peer'а имеют свежий handshake и ненулевой transfer. Пинги до обоих CHR через WireGuard проходят без потерь
-
+ 
 Проверка с CHR1:
-
+ 
 ```
 /ping count=4 10.10.10.1
 /ping count=4 10.10.10.3
-/ping count=4 2.2.2.2
 ```
-
+ 
 С CHR2:
-
+ 
 ```
 /ping count=4 10.10.10.1
 /ping count=4 10.10.10.2
-/ping count=4 1.1.1.1
 ```
-
-Пинги до сервера, до второго CHR через туннель, и до loopback-адреса другого CHR через OSPF-маршрут проходят без потерь
-
+ 
 ### Сбор данных и конфигов
-
+ 
 Плейбук сохраняет результаты в локальную папку `./configs/` на сервере:
-
+ 
 ```bash
 $ ls -la configs/
-total 24
-drwxr-xr-x 2 root root 4096 May 22 11:38 .
-drwxr-xr-x 3 root root 4096 May 22 11:37 ..
--rw-r--r-- 1 root root 1415 May 22 11:38 chr1_export.rsc
--rw-r--r-- 1 root root  280 May 22 11:38 chr1_ospf.txt
--rw-r--r-- 1 root root 1473 May 22 11:38 chr2_export.rsc
--rw-r--r-- 1 root root  280 May 22 11:38 chr2_ospf.txt
+total 80
+drwxr-xr-x 2 root root  4096 May 29 13:42 .
+drwxr-xr-x 3 root root  4096 May 29 13:40 ..
+-rw-r--r-- 1 root root  1411 May 29 13:42 chr1_export.rsc
+-rw-r--r-- 1 root root 25885 May 29 13:42 chr1_facts.json
+-rw-r--r-- 1 root root   271 May 29 13:42 chr1_ospf.txt
+-rw-r--r-- 1 root root  1411 May 29 13:42 chr2_export.rsc
+-rw-r--r-- 1 root root 25884 May 29 13:42 chr2_facts.json
+-rw-r--r-- 1 root root   271 May 29 13:42 chr2_ospf.txt
 ```
-
-Содержимое `chr1_ospf.txt` показывает OSPF-интерфейсы и установленное соседство:
-
-```
-NEIGHBORS:
-Flags: D - dynamic
- 0 D address=10.10.10.2%wg-to-vps area=backbone state=ptp network-type=ptp
-     cost=1 use-bfd=no retransmit-interval=5s transmit-delay=1s
-     hello-interval=10s dead-interval=40s
-
- 1 D address=1.1.1.1%loopback area=backbone state=ptp network-type=ptp
-     cost=1 use-bfd=no retransmit-interval=5s transmit-delay=1s
-     hello-interval=10s dead-interval=40s
-
-Flags: V - virtual; D - dynamic
- 0 D instance=default area=backbone address=10.10.10.3
-   router-id=2.2.2.2 state="Full" state-changes=1 adjacency=2m14s
-   timeout=40s
-```
-
-Видно соседство с CHR2 (router-id=2.2.2.2) в состоянии **Full** — OSPF-смежность установлена успешно
-
+ 
 Файл `chr1_export.rsc` содержит полный конфиг устройства, включая WireGuard, OSPF, identity, NTP, пользователей и 
 сервисы. Это и есть требуемые «2 файла с конфигурациями устройств» из условия лабораторной работы
-
+ 
 ### Итоговая схема
-
+ 
 ```
                           VPS (Ubuntu)
                        Ansible + WireGuard
@@ -382,11 +350,13 @@ Flags: V - virtual; D - dynamic
                   \___                  ___/
                       \___OSPF area 0__/
 ```
-
+ 
 ### Вывод
-
+ 
 В ходе выполнения лабораторной работы развернут второй CHR клонированием первого в UTM и подключен к тому же 
-WireGuard-серверу как второй peer. Собран файл Inventory для Ansible с двумя хостами в одной группе и общими 
-переменными подключения. Написан плейбук, который одновременно настраивает оба роутера: задает identity, NTP-клиента 
-и OSPF с уникальным Router ID для каждого устройства. Между двумя CHR через VPN-туннель установлено OSPF-соседство в 
-area 0. Конфигурации обоих устройств и данные OSPF-топологии собраны в локальные файлы
+WireGuard-серверу как второй peer. При настройке обнаружена особенность — оба CHR находятся за одним NAT на Mac M1, 
+поэтому для CHR2 потребовалось задать отличный listen-port (51821), иначе NAT не различает входящие пакеты. 
+Собран файл Inventory для Ansible с двумя хостами в одной группе и общими переменными подключения. Написан плейбук, 
+который одновременно настраивает оба роутера: создаёт loopback-интерфейс, задаёт identity, NTP-клиента и OSPF 
+с уникальным Router ID для каждого устройства. Конфигурации обоих устройств и данные OSPF-топологии собраны 
+в локальные файлы
