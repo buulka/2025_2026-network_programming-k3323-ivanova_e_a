@@ -1,0 +1,5 @@
+plugin: netbox.netbox.nb_inventory
+api_endpoint: http://10.10.10.4:8000
+token: xxx
+validate_certs: false
+config_context: true

@@ -1,0 +1,40 @@
+---
+- name: Collect serial number and update Netbox
+  hosts: mikrotik
+  gather_facts: no
+
+  vars:
+    netbox_url: "http://10.10.10.4:8000"
+    netbox_token: "nbt_cgBmOET4QdDn.0i5MWWtxX1KtDE9bJCDRQe3fLDayr5XIwoMsXc25"
+
+  tasks:
+    - name: Get serial number from CHR
+      community.routeros.command:
+        commands:
+          - /system license print
+      register: license_output
+
+    - name: Parse serial number
+      set_fact:
+        serial_number: "{{ license_output.stdout[0] | regex_search('system-id: (\\S+)', '\\1') | first }}"
+
+    - name: Get device ID from Netbox
+      uri:
+        url: "{{ netbox_url }}/api/dcim/devices/?name={{ inventory_hostname }}"
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+        return_content: yes
+      register: netbox_device
+      delegate_to: localhost
+
+    - name: Update serial number in Netbox
+      uri:
+        url: "{{ netbox_url }}/api/dcim/devices/{{ netbox_device.json.results[0].id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          serial: "{{ serial_number }}"
+      delegate_to: localhost

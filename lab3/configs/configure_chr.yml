@@ -1,0 +1,34 @@
+---
+- name: Configure CHR from Netbox
+  hosts: mikrotik
+  gather_facts: no
+
+  vars:
+    netbox_url: "http://10.10.10.4:8000"
+    netbox_token: "nbt_cgBmOET4QdDn.0i5MWWtxX1KtDE9bJCDRQe3fLDayr5XIwoMsXc25"
+
+  tasks:
+    - name: Get device info from Netbox
+      uri:
+        url: "{{ netbox_url }}/api/dcim/devices/?name={{ inventory_hostname }}"
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+        return_content: yes
+      register: netbox_device
+      delegate_to: localhost
+
+    - name: Set device facts
+      set_fact:
+        device_name: "{{ netbox_device.json.results[0].name }}"
+        device_ip: "{{ netbox_device.json.results[0].primary_ip.address | default('') }}"
+
+    - name: Set device name
+      community.routeros.command:
+        commands:
+          - /system identity set name="{{ device_name }}"
+
+    - name: Add IP address to wg-to-vps interface
+      community.routeros.command:
+        commands:
+          - /ip address add address="{{ device_ip }}" interface=wg-to-vps comment="from-netbox"
+      when: device_ip != ''
