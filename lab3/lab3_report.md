@@ -53,7 +53,7 @@ docker-compose exec netbox /opt/netbox/netbox/manage.py createsuperuser
 
 Netbox доступен по адресу `http://192.168.1.183:8000`.
 
-![Главная страница Netbox](lab3/images/Screenshot_2026-06-06_at_14_12_51.png)
+![Главная страница Netbox](images/netbox_main.png)
 
 ---
 
@@ -67,9 +67,9 @@ Netbox доступен по адресу `http://192.168.1.183:8000`.
 - **Device Role**: Router
 - **Devices**: CHR1, CHR2
 
-![Список устройств](images/Screenshot_2026-06-06_at_14_16_59.png)
+![Список устройств](images/devices_list.png)
 
-![Форма создания устройства CHR1](images/Screenshot_2026-06-06_at_14_17_30.png)
+![Форма создания устройства CHR1](images/device_create.png)
 
 Для каждого устройства добавлены интерфейсы:
 
@@ -79,7 +79,7 @@ Netbox доступен по адресу `http://192.168.1.183:8000`.
 | loopback0 | Bridge | — |
 | wg-to-vps | Bridge | 1420 |
 
-![Интерфейсы CHR2](images/Screenshot_2026-06-06_at_14_24_01.png)
+![Интерфейсы CHR2](images/interfaces.png)
 
 IP-адреса добавлены через IPAM и привязаны к соответствующим интерфейсам:
 
@@ -90,15 +90,15 @@ IP-адреса добавлены через IPAM и привязаны к со
 | CHR1 | loopback0 | 10.200.0.1/24 |
 | CHR2 | loopback0 | 10.200.0.2/24 |
 
-![Список IP-адресов](images/Screenshot_2026-06-06_at_14_25_53.png)
+![Список IP-адресов](images/ip_list.png)
 
 Для каждого устройства добавлены сервисы SSH (TCP/22) и WireGuard (UDP/51820):
 
-![Форма добавления сервиса SSH](images/Screenshot_2026-06-06_at_14_29_48.png)
+![Форма добавления сервиса SSH](images/service_ssh.png)
 
-![Форма добавления сервиса WG](images/Screenshot_2026-06-06_at_14_30_19.png)
+![Форма добавления сервиса WG](images/service_wg.png)
 
-![Список сервисов](images/Screenshot_2026-06-06_at_14_30_45.png)
+![Список сервисов](images/services_list.png)
 
 Дополнительные настройки (NTP, OSPF, WireGuard) добавлены через **Config Context** в формате JSON для каждого устройства.
 
@@ -377,8 +377,7 @@ chr2 : ok=4  changed=1  unreachable=0  failed=0  skipped=0  rescued=0  ignored=0
 
 Серийный номер успешно записан в Netbox:
 
-![CHR1 с серийным номером в Netbox](images/Screenshot_2026-06-06_at_14_53_17.png)
-
+![CHR1 с серийным номером в Netbox](images/serial_number.png)
 
 ### Вывод
 
