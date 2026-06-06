@@ -53,7 +53,7 @@ docker-compose exec netbox /opt/netbox/netbox/manage.py createsuperuser
 
 Netbox доступен по адресу `http://192.168.1.183:8000`.
 
-![Главная страница Netbox](images/Screenshot_2026-06-06_at_14_12_51.png)
+![Главная страница Netbox](lab3/images/Screenshot_2026-06-06_at_14_12_51.png)
 
 ---
 
