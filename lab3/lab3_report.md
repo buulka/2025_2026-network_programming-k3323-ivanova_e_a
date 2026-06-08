@@ -5,7 +5,7 @@ Year: 2025/2026
 Group: K3323  
 Author: Ivanova Ekaterina Andreevna  
 Lab: Lab3  
-Date of creation: 
+Date of creation:  
 Date of finish:  
 
 ---
